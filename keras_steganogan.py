@@ -64,7 +64,13 @@ class KerasSteganoGAN(keras.Model):
   def call(self, inputs, training=False):
     cover_image, message = inputs
     stego_img = self.encoder([cover_image, message], training=training)
-    recovered_msg = self.decoder(stego_img, training=training)
+
+    stego_img = tf.clip_by_value(stego_img, -1.0, 1.0)
+    stego_img_to_decode = (stego_img + 1.0) * 127.5
+    stego_img_to_decode = stego_img_to_decode / 255.0
+
+    recovered_msg = self.decoder(stego_img_to_decode, training=training)
+    recovered_msg = tf.cast(recovered_msg > 0.0, tf.float32)
     return stego_img, recovered_msg
 
   @tf.function 
