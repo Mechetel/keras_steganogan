@@ -4,6 +4,7 @@ os.environ["KERAS_BACKEND"] = "tensorflow"
 import tensorflow as tf
 import numpy as np
 import keras
+from keras.losses import BinaryCrossentropy
 from functools import reduce
 from imageio.v2 import imread, imwrite
 from models import steganogan_encoder_dense_model, steganogan_decoder_dense_model, steganogan_critic_model
@@ -72,9 +73,13 @@ class KerasSteganoGAN(keras.Model):
       
     with tf.GradientTape() as encoder_tape, tf.GradientTape() as decoder_tape, tf.GradientTape() as critic_tape:
       stego_img = self.encoder([cover_image, message], training=True)
-      recovered_msg = self.decoder(stego_img, training=True)
+      stego_img = tf.clip_by_value(stego_img, -1.0, 1.0)
+
+      stego_img_to_decode = (stego_img + 1.0) * 127.5
+      stego_img_to_decode = stego_img_to_decode / 255.0
+      recovered_msg = self.decoder(stego_img_to_decode, training=True)
       
-      similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_img)) * 100
+      similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_img)) * 100.0
       decoding_loss = self.loss_fn(message, recovered_msg)
       realism_loss = self.critic(stego_img, training=True)
       
@@ -120,9 +125,13 @@ class KerasSteganoGAN(keras.Model):
     cover_image, message = data
 
     stego_img = self.encoder([cover_image, message], training=False)
-    recovered_msg = self.decoder(stego_img, training=False)
+    stego_img = tf.clip_by_value(stego_img, -1.0, 1.0)
 
-    similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_img)) * 100
+    stego_img_to_decode = (stego_img + 1.0) * 127.5
+    stego_img_to_decode = stego_img_to_decode / 255.0
+    recovered_msg = self.decoder(stego_img_to_decode, training=False)
+
+    similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_img)) * 100.0
     decoding_loss = self.loss_fn(message, recovered_msg)
     realism_loss = self.critic(stego_img, training=False)
     
@@ -152,58 +161,57 @@ class KerasSteganoGAN(keras.Model):
       'bpp': self.bpp_tracker.result()
     }
   
-  def _image_to_tensor(self, image, save_to=None):
+  def _image_to_tensor(self, image, save_to=None, normalize='0 to 1'):
     image = tf.image.resize(image, [self.height, self.width])
     if save_to is not None:
       imwrite("images/resized_{0}".format(save_to), image.numpy().astype(np.uint8))
     image = tf.cast(image, tf.float32)
     image = tf.convert_to_tensor(image)
-    image = (image/127.5)-1
+    if normalize == '0 to 1':
+      image = image / 255.0
+    elif normalize == '-1 to 1':
+      image = (image / 127.5) - 1.0
     image = tf.expand_dims(image, axis=0)
     return image
   
   def _decoded_message_tensor_normalize(self, message_tensor):
-    message_tensor = tf.math.rint(message_tensor)
+    message_tensor = message_tensor > 0.0
     return tf.cast(message_tensor, tf.int8)
   
   def _stego_tensor_to_image(self, stego_tensor):
     stego_image = tf.squeeze(stego_tensor)
-    stego_image = (stego_image+1)*127.5
+    stego_image = (stego_image + 1.0) * 127.5
     stego_image = tf.cast(stego_image, tf.uint32)
     return stego_image
 
   def encode(self, cover_path, stego_path, message):
     cover = imread(cover_path)
-    cover_tensor = self._image_to_tensor(cover, save_to=cover_path)
+    cover_tensor = self._image_to_tensor(cover, save_to=cover_path, normalize='-1 to 1')
 
     message = text_to_bits(message, self.message_shape)
-    message = np.reshape(message, (1, self.width, self.height, self.data_depth))
+    message = np.reshape(message, (1, self.width, self.height, self.data_depth)) 
     message = tf.convert_to_tensor(message, dtype=tf.float32)
 
     stego_tensor = self.encoder([cover_tensor, message])
-
+    stego_tensor = tf.clip_by_value(stego_tensor, -1.0, 1.0)
     stego_image = self._stego_tensor_to_image(stego_tensor)
     imwrite(stego_path, stego_image.numpy().astype(np.uint8))
 
     ######## DEBUGGING ########
-    #message_to_output = tf.cast(message, tf.int8)
-    #print(message_to_output)
-    #print(bits_to_text(message_to_output, self.message_shape))
-
     #decoded_message_tensor = self.decoder(stego_tensor)
     #decoded_message_tensor = self._decoded_message_tensor_normalize(decoded_message_tensor)
 
-    #print(BinaryCrossentropy(from_logits=False)(message_to_output, decoded_message_tensor))
+    #print(BinaryCrossentropy(from_logits=False)(message, decoded_message_tensor))
     #print(decoded_message_tensor)
     #print(bits_to_text(decoded_message_tensor, self.message_shape))
     ######## DEBUGGING END ########
 
   def decode(self, stego):
     stego = imread(stego)
-    stego_tensor = self._image_to_tensor(stego)
+    stego_tensor = self._image_to_tensor(stego, save_to=None, normalize='0 to 1')
 
     message_tensor = self.decoder(stego_tensor)
     message_tensor = self._decoded_message_tensor_normalize(message_tensor)
-    
+
     message = bits_to_text(message_tensor, self.message_shape)
     return message

@@ -25,7 +25,7 @@ def steganogan_encoder_dense_model(H, W, C, D):
     c = BatchNormalization(name='c_normalize')(c)
 
     d_concatenate = Concatenate(name='d_concatenate')([a, b, c, Message])
-    d = Conv2D(3, kernel_size=3, padding='same', activation=sigmoid, name='d_conv')(d_concatenate)
+    d = Conv2D(3, kernel_size=3, padding='same', name='d_conv')(d_concatenate)
 
     Encoder_d = Add(name='add_C_d')([Cover, d])
     
@@ -53,7 +53,7 @@ def steganogan_decoder_dense_model(H, W, C, D):
     c = BatchNormalization(name='c_normalize')(c)
 
     Decoder_concatenate = Concatenate(name='Decoder_concatenate')([a, b, c])
-    Decoder = Conv2D(D, kernel_size=3, padding='same', activation=sigmoid, name='Decoder_conv')(Decoder_concatenate)
+    Decoder = Conv2D(D, kernel_size=3, padding='same', name='Decoder_conv')(Decoder_concatenate)
 
     model = Model(inputs=Cover, outputs=Decoder, name='KerasSteganoGAN_decoder')
     return model
@@ -76,7 +76,7 @@ def steganogan_critic_model(H, W, C):
     a = Conv2D(32, kernel_size=3, padding='same', activation=LeakyReLU(), name='a_conv_3')(a)
     a = BatchNormalization(name='a_normalize_3')(a)
 
-    x = Conv2D(1, kernel_size=3, padding='same', activation=sigmoid, name='a_conv_4')(a)
+    x = Conv2D(1, kernel_size=3, padding='same', name='a_conv_4')(a)
 
     mean = AveragePooling2D(pool_size=(x.shape[1], x.shape[2]), name='mean')(x)
     
