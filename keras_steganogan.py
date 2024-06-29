@@ -84,6 +84,7 @@ class KerasSteganoGAN(keras.Model):
       stego_img_to_decode = (stego_img + 1.0) * 127.5
       stego_img_to_decode = stego_img_to_decode / 255.0
       recovered_msg = self.decoder(stego_img_to_decode, training=True)
+      recovered_msg = tf.cast(recovered_msg > 0.0, tf.float32)
       
       similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_img)) * 100.0
       decoding_loss = self.loss_fn(message, recovered_msg)
@@ -136,6 +137,7 @@ class KerasSteganoGAN(keras.Model):
     stego_img_to_decode = (stego_img + 1.0) * 127.5
     stego_img_to_decode = stego_img_to_decode / 255.0
     recovered_msg = self.decoder(stego_img_to_decode, training=False)
+    recovered_msg = tf.cast(recovered_msg > 0.0, tf.float32)
 
     similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_img)) * 100.0
     decoding_loss = self.loss_fn(message, recovered_msg)
