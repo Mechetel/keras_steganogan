@@ -63,57 +63,57 @@ class KerasSteganoGAN(keras.Model):
   @tf.function 
   def call(self, inputs, training=False):
     cover_image, message = inputs
-    stego_img = self.encoder([cover_image, message], training=training)
+    
+    stego_image = self.encoder([cover_image, message], training=training)
+    recovered_message = self.decoder(stego_image, training=training)
 
-    stego_img = tf.clip_by_value(stego_img, -1.0, 1.0)
-    stego_img_to_decode = (stego_img + 1.0) * 127.5
-    stego_img_to_decode = stego_img_to_decode / 255.0
+    return stego_image, recovered_message
 
-    recovered_msg = self.decoder(stego_img_to_decode, training=training)
-    recovered_msg = tf.cast(recovered_msg > 0.0, tf.float32)
-    return stego_img, recovered_msg
+  @tf.function
+  def critic_loss(self, cover_image, stego_image):
+    cover_critic_score = self.critic(cover_image, training=True)
+    stego_critic_score = self.critic(stego_image, training=True)
+    return cover_critic_score - stego_critic_score
+  
+  @tf.function
+  def endoder_decoder_loss(self, cover_image, stego_image, message, recovered_message):
+    similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_image))
+    decoding_loss = self.loss_fn(message, recovered_message) 
+    realism_loss = self.critic(stego_image, training=True)
 
-  @tf.function 
+    total_loss = similarity_loss + decoding_loss + realism_loss
+    
+    return total_loss, similarity_loss, decoding_loss, realism_loss
+  
+  @tf.function
   def train_step(self, data):
     cover_image, message = data
-      
+
     with tf.GradientTape() as encoder_tape, tf.GradientTape() as decoder_tape, tf.GradientTape() as critic_tape:
-      stego_img = self.encoder([cover_image, message], training=True)
-      stego_img = tf.clip_by_value(stego_img, -1.0, 1.0)
-
-      stego_img_to_decode = (stego_img + 1.0) * 127.5
-      stego_img_to_decode = stego_img_to_decode / 255.0
-      recovered_msg = self.decoder(stego_img_to_decode, training=True)
-      recovered_msg = tf.cast(recovered_msg > 0.0, tf.float32)
+      stego_image = self.encoder([cover_image, message], training=True)
+      recovered_message = self.decoder(stego_image, training=True)
       
-      similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_img)) * 100.0
-      decoding_loss = self.loss_fn(message, recovered_msg)
-      realism_loss = self.critic(stego_img, training=True)
-      
-      encoder_decoder_total_loss = similarity_loss + decoding_loss + realism_loss
-
-      cover_critic_score = self.critic(cover_image, training=True)
-      stego_critic_score = self.critic(stego_img, training=True)
-      critic_loss = cover_critic_score - stego_critic_score
+      encoder_decoder_total_loss, similarity_loss, decoding_loss, realism_loss = self.endoder_decoder_loss(cover_image, stego_image, message, recovered_message)
+      critic_loss = self.critic_loss(cover_image, stego_image)
 
     encoder_grads = encoder_tape.gradient(encoder_decoder_total_loss, self.encoder.trainable_variables)
     decoder_grads = decoder_tape.gradient(encoder_decoder_total_loss, self.decoder.trainable_variables)
     critic_grads = critic_tape.gradient(critic_loss, self.critic.trainable_variables)
-    
+
     self.encoder_optimizer.apply_gradients(zip(encoder_grads, self.encoder.trainable_variables))
     self.decoder_optimizer.apply_gradients(zip(decoder_grads, self.decoder.trainable_variables))
     self.critic_optimizer.apply_gradients(zip(critic_grads, self.critic.trainable_variables))
 
-    for i in range(len(self.critic.trainable_variables)):
-      self.critic.trainable_variables[i].assign(tf.clip_by_value(self.critic.trainable_variables[i], -0.1, 0.1)) 
+    for p in self.critic.trainable_variables:
+      p.assign(tf.clip_by_value(p, -0.1, 0.1))
             
     self.encoder_decoder_total_loss_tracker.update_state(encoder_decoder_total_loss)
     self.critic_loss_tracker.update_state(critic_loss)
     self.similarity_loss_tracker.update_state(similarity_loss)
     self.decoding_loss_tracker.update_state(decoding_loss)
     self.realism_loss_tracker.update_state(realism_loss)
-    self.psnr_tracker.update_state(tf.image.psnr(cover_image, stego_img, max_val=1.0))
-    self.ssim_tracker.update_state(tf.image.ssim(cover_image, stego_img, max_val=1.0))
+    self.psnr_tracker.update_state(tf.image.psnr(cover_image, stego_image, max_val=1.0))
+    self.ssim_tracker.update_state(tf.image.ssim(cover_image, stego_image, max_val=1.0))
     self.bpp_tracker.update_state(reduce(lambda x, y: x * y, message.shape[-3:]) / (cover_image.shape[1] * cover_image.shape[2]))
 
     return {
@@ -131,31 +131,19 @@ class KerasSteganoGAN(keras.Model):
   def test_step(self, data):
     cover_image, message = data
 
-    stego_img = self.encoder([cover_image, message], training=False)
-    stego_img = tf.clip_by_value(stego_img, -1.0, 1.0)
+    stego_image = self.encoder([cover_image, message], training=False)
+    recovered_message = self.decoder(stego_image, training=False)
 
-    stego_img_to_decode = (stego_img + 1.0) * 127.5
-    stego_img_to_decode = stego_img_to_decode / 255.0
-    recovered_msg = self.decoder(stego_img_to_decode, training=False)
-    recovered_msg = tf.cast(recovered_msg > 0.0, tf.float32)
-
-    similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_img)) * 100.0
-    decoding_loss = self.loss_fn(message, recovered_msg)
-    realism_loss = self.critic(stego_img, training=False)
-    
-    encoder_decoder_total_loss = similarity_loss + decoding_loss + realism_loss
-
-    cover_critic_score = self.critic(cover_image, training=False)
-    stego_critic_score = self.critic(stego_img, training=False)
-    critic_loss = cover_critic_score - stego_critic_score
+    encoder_decoder_total_loss, similarity_loss, decoding_loss, realism_loss = self.endoder_decoder_loss(cover_image, stego_image, message, recovered_message)
+    critic_loss = self.critic_loss(cover_image, stego_image)
 
     self.encoder_decoder_total_loss_tracker.update_state(encoder_decoder_total_loss)
     self.critic_loss_tracker.update_state(critic_loss)
     self.similarity_loss_tracker.update_state(similarity_loss)
     self.decoding_loss_tracker.update_state(decoding_loss)
     self.realism_loss_tracker.update_state(realism_loss)
-    self.psnr_tracker.update_state(tf.image.psnr(cover_image, stego_img, max_val=1.0))
-    self.ssim_tracker.update_state(tf.image.ssim(cover_image, stego_img, max_val=1.0))
+    self.psnr_tracker.update_state(tf.image.psnr(cover_image, stego_image, max_val=1.0))
+    self.ssim_tracker.update_state(tf.image.ssim(cover_image, stego_image, max_val=1.0))
     self.bpp_tracker.update_state(reduce(lambda x, y: x * y, message.shape[-3:]) / (cover_image.shape[1] * cover_image.shape[2]))
 
     return {
@@ -182,10 +170,6 @@ class KerasSteganoGAN(keras.Model):
     image = tf.expand_dims(image, axis=0)
     return image
   
-  def _decoded_message_tensor_normalize(self, message_tensor):
-    message_tensor = message_tensor > 0.0
-    return tf.cast(message_tensor, tf.int8)
-  
   def _stego_tensor_to_image(self, stego_tensor):
     stego_image = tf.squeeze(stego_tensor)
     stego_image = (stego_image + 1.0) * 127.5
@@ -201,25 +185,24 @@ class KerasSteganoGAN(keras.Model):
     message = tf.convert_to_tensor(message, dtype=tf.float32)
 
     stego_tensor = self.encoder([cover_tensor, message])
-    stego_tensor = tf.clip_by_value(stego_tensor, -1.0, 1.0)
     stego_image = self._stego_tensor_to_image(stego_tensor)
     imwrite(stego_path, stego_image.numpy().astype(np.uint8))
 
     ######## DEBUGGING ########
-    #decoded_message_tensor = self.decoder(stego_tensor)
-    #decoded_message_tensor = self._decoded_message_tensor_normalize(decoded_message_tensor)
+    # decoded_message_tensor = self.decoder(stego_tensor)
+    # decoded_message_tensor = tf.cast(decoded_message_tensor, tf.int8)
 
-    #print(BinaryCrossentropy(from_logits=False)(message, decoded_message_tensor))
-    #print(decoded_message_tensor)
-    #print(bits_to_text(decoded_message_tensor, self.message_shape))
+    # print(BinaryCrossentropy(from_logits=False)(message, decoded_message_tensor))
+    # print(decoded_message_tensor)
+    # print(bits_to_text(decoded_message_tensor, self.message_shape))
     ######## DEBUGGING END ########
 
   def decode(self, stego):
     stego = imread(stego)
-    stego_tensor = self._image_to_tensor(stego, save_to=None, normalize='0 to 1')
+    stego_tensor = self._image_to_tensor(stego, save_to=None, normalize='-1 to 1')
 
     message_tensor = self.decoder(stego_tensor)
-    message_tensor = self._decoded_message_tensor_normalize(message_tensor)
+    message_tensor = tf.cast(message_tensor, tf.int8)
 
     message = bits_to_text(message_tensor, self.message_shape)
     return message
