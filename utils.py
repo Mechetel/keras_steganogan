@@ -1,5 +1,4 @@
 import numpy as np
-from functools import reduce
 from collections import Counter
 
 
@@ -24,7 +23,7 @@ def text_to_bits(text, message_shape):
   message = result + [0] * 32
   payload = message
   while len(payload) < message_shape_prod:
-      payload += message
+    payload += message
 
   payload = payload[:message_shape_prod]
   return payload
@@ -41,12 +40,12 @@ def bits_to_text(bits, message_shape):
 
   candidates = Counter()
   for candidate in full_message.split('\x00\x00\x00\x00'):
-      if candidate:
-          candidates[candidate] += 1
+    if candidate:
+      candidates[candidate] += 1
 
   # choose most common message
   if len(candidates) == 0:
-      raise ValueError('Failed to find message.')
+    raise ValueError('Failed to find message.')
 
   candidate, count = candidates.most_common(1)[0]
   print(f'Found {count} candidates for message, choosing most common.')
