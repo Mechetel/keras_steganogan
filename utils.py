@@ -52,7 +52,6 @@ def bits_to_text(bits, message_shape):
 
   return candidate
 
-
 # [0000000]
 # [0000000]
 # [1000000]
