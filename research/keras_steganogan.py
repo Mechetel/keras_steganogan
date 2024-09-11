@@ -5,7 +5,7 @@ import tensorflow as tf
 import numpy as np
 import keras
 from keras.losses import BinaryCrossentropy
-from functools import reduce
+from keras.optimizers import Adam
 from imageio.v2 import imread, imwrite
 from models import steganogan_encoder_dense_model, steganogan_decoder_dense_model
 from utils import text_to_bits, bits_to_text
@@ -49,9 +49,9 @@ class KerasSteganoGAN(keras.Model):
 
   def compile(self, encoder_optimizer, decoder_optimizer, loss_fn):
     super(KerasSteganoGAN, self).compile()
-    self.encoder_optimizer = encoder_optimizer
-    self.decoder_optimizer = decoder_optimizer
-    self.loss_fn           = loss_fn
+    self.encoder_optimizer = encoder_optimizer or Adam(learning_rate=1e-4, beta_1=0.5)
+    self.decoder_optimizer = decoder_optimizer or Adam(learning_rate=1e-4, beta_1=0.5)
+    self.loss_fn           = loss_fn or BinaryCrossentropy(from_logits=False)
 
   @tf.function 
   def call(self, inputs, training=False):
@@ -94,7 +94,7 @@ class KerasSteganoGAN(keras.Model):
     self.decoding_loss_tracker.update_state(decoding_loss)
     self.psnr_tracker.update_state(tf.image.psnr(cover_image, stego_image, max_val=1.0))
     self.ssim_tracker.update_state(tf.image.ssim(cover_image, stego_image, max_val=1.0))
-    self.bpp_tracker.update_state(reduce(lambda x, y: x * y, message.shape[-3:]) / (cover_image.shape[1] * cover_image.shape[2]))
+    self.bpp_tracker.update_state(self.data_depth * (2 * decoding_loss - 1))
 
     return {
       'encoder_decoder_total_loss': self.encoder_decoder_total_loss_tracker.result(),
@@ -119,7 +119,7 @@ class KerasSteganoGAN(keras.Model):
     self.decoding_loss_tracker.update_state(decoding_loss)
     self.psnr_tracker.update_state(tf.image.psnr(cover_image, stego_image, max_val=1.0))
     self.ssim_tracker.update_state(tf.image.ssim(cover_image, stego_image, max_val=1.0))
-    self.bpp_tracker.update_state(reduce(lambda x, y: x * y, message.shape[-3:]) / (cover_image.shape[1] * cover_image.shape[2]))
+    self.bpp_tracker.update_state(self.data_depth * (2 * decoding_loss - 1))
 
     return {
       'encoder_decoder_total_loss': self.encoder_decoder_total_loss_tracker.result(),
@@ -130,10 +130,8 @@ class KerasSteganoGAN(keras.Model):
       'bpp': self.bpp_tracker.result()
     }
 
-  def _image_to_tensor(self, image, save_to=None, normalize='0 to 1'):
+  def _image_to_tensor(self, image, normalize='0 to 1'):
     image = tf.image.resize(image, [self.height, self.width])
-    # if save_to is not None:
-    #   imwrite("images/resized_{0}".format(save_to), image.numpy().astype(np.uint8))
     image = tf.cast(image, tf.float32)
     image = tf.convert_to_tensor(image)
     if normalize == '0 to 1':
@@ -151,7 +149,7 @@ class KerasSteganoGAN(keras.Model):
 
   def encode(self, cover_path, stego_path, message):
     cover = imread(cover_path)
-    cover_tensor = self._image_to_tensor(cover, save_to=cover_path, normalize='-1 to 1')
+    cover_tensor = self._image_to_tensor(cover, normalize='-1 to 1')
 
     message = text_to_bits(message, self.message_shape)
     message = np.reshape(message, (1, self.width, self.height, self.data_depth)) 
@@ -161,18 +159,9 @@ class KerasSteganoGAN(keras.Model):
     stego_image = self._stego_tensor_to_image(stego_tensor)
     imwrite(stego_path, stego_image.numpy().astype(np.uint8))
 
-    ######## DEBUGGING ########
-    # decoded_message_tensor = self.decoder(stego_tensor)
-    # decoded_message_tensor = tf.cast(tf.round(decoded_message_tensor), tf.int8)
-
-    # print(BinaryCrossentropy(from_logits=False)(message, decoded_message_tensor))
-    # print(decoded_message_tensor)
-    # print(bits_to_text(decoded_message_tensor, self.message_shape))
-    ######## DEBUGGING END ########
-
   def decode(self, stego):
     stego = imread(stego)
-    stego_tensor = self._image_to_tensor(stego, save_to=None, normalize='-1 to 1')
+    stego_tensor = self._image_to_tensor(stego, normalize='-1 to 1')
 
     message_tensor = self.decoder(stego_tensor)
     message_tensor = tf.round(message_tensor)
