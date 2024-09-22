@@ -29,11 +29,12 @@ class KerasSteganoGAN(keras.Model):
     self.encoder_decoder_total_loss_tracker = keras.metrics.Mean(name="encoder_decoder_total_loss")   
     self.critic_loss_tracker = keras.metrics.Mean(name="critic_loss")
     self.similarity_loss_tracker = keras.metrics.Mean(name="similarity_loss")
-    self.decoding_loss_tracker = keras.metrics.Mean(name="decoding_loss")
+    self.decoder_loss_tracker = keras.metrics.Mean(name="decoder_loss")
+    self.decoder_accuracy_tracker = keras.metrics.Mean(name="decoder_accuracy")
     self.realism_loss_tracker = keras.metrics.Mean(name="realism_loss")
     self.psnr_tracker = keras.metrics.Mean(name="psnr")
     self.ssim_tracker = keras.metrics.Mean(name="ssim")
-    self.bpp_tracker = keras.metrics.Mean(name="bpp")
+    self.rs_bpp_tracker = keras.metrics.Mean(name="rs_bpp")
 
   @property
   def metrics(self):
@@ -41,11 +42,12 @@ class KerasSteganoGAN(keras.Model):
       self.encoder_decoder_total_loss_tracker,
       self.critic_loss_tracker,
       self.similarity_loss_tracker,
-      self.decoding_loss_tracker,
+      self.decoder_loss_tracker,
+      self.decoder_accuracy_tracker,
       self.realism_loss_tracker,
       self.psnr_tracker,
       self.ssim_tracker,
-      self.bpp_tracker
+      self.rs_bpp_tracker
     ]
 
   def models_summary(self):
@@ -78,12 +80,23 @@ class KerasSteganoGAN(keras.Model):
   @tf.function
   def endoder_decoder_loss(self, cover_image, stego_image, message, recovered_message):
     similarity_loss = tf.reduce_mean(tf.square(cover_image - stego_image))
-    decoding_loss = self.loss_fn(message, recovered_message) 
+    decoder_loss = self.loss_fn(message, recovered_message) 
     realism_loss = self.critic(stego_image, training=True)
 
-    total_loss = similarity_loss + decoding_loss + realism_loss
+    total_loss = similarity_loss + decoder_loss + realism_loss
 
-    return total_loss, similarity_loss, decoding_loss, realism_loss
+    return total_loss, similarity_loss, decoder_loss, realism_loss
+
+  @tf.function
+  def decoder_accuracy(self, message, recovered_message):
+    binary_payload = tf.greater_equal(message, 0.5)
+    binary_decoded = tf.greater_equal(recovered_message, 0.5)
+
+    equal_elements = tf.equal(binary_payload, binary_decoded)
+    casted_elements = tf.cast(equal_elements, tf.float32)
+    decoder_accuracy = tf.reduce_mean(casted_elements)
+
+    return decoder_accuracy
 
   @tf.function
   def train_step(self, data):
@@ -93,7 +106,8 @@ class KerasSteganoGAN(keras.Model):
       stego_image = self.encoder([cover_image, message], training=True)
       recovered_message = self.decoder(stego_image, training=True)
 
-      encoder_decoder_total_loss, similarity_loss, decoding_loss, realism_loss = self.endoder_decoder_loss(cover_image, stego_image, message, recovered_message)
+      encoder_decoder_total_loss, similarity_loss, decoder_loss, realism_loss = self.endoder_decoder_loss(cover_image, stego_image, message, recovered_message)
+      decoder_accuracy = self.decoder_accuracy(message, recovered_message)
       critic_loss = self.critic_loss(cover_image, stego_image)
 
     encoder_grads = encoder_tape.gradient(encoder_decoder_total_loss, self.encoder.trainable_variables)
@@ -110,23 +124,25 @@ class KerasSteganoGAN(keras.Model):
     self.encoder_decoder_total_loss_tracker.update_state(encoder_decoder_total_loss)
     self.critic_loss_tracker.update_state(critic_loss)
     self.similarity_loss_tracker.update_state(similarity_loss)
-    self.decoding_loss_tracker.update_state(decoding_loss)
+    self.decoder_loss_tracker.update_state(decoder_loss)
+    self.decoder_accuracy_tracker.update_state(decoder_accuracy)
     self.realism_loss_tracker.update_state(realism_loss)
     self.psnr_tracker.update_state(tf.image.psnr(cover_image, stego_image, max_val=1.0))
     self.ssim_tracker.update_state(tf.image.ssim(cover_image, stego_image, max_val=1.0))
-    self.bpp_tracker.update_state(self.data_depth * (2 * decoding_loss - 1))
+    self.rs_bpp_tracker.update_state(self.data_depth * (2 * decoder_accuracy - 1))
 
     return {
       'encoder_decoder_total_loss': self.encoder_decoder_total_loss_tracker.result(),
       'critic_loss': self.critic_loss_tracker.result(),
       'similarity_loss': self.similarity_loss_tracker.result(),
-      'decoding_loss': self.decoding_loss_tracker.result(),
+      'decoder_loss': self.decoder_loss_tracker.result(),
+      'decoder_accuracy': self.decoder_accuracy_tracker.result(),
       'realism_loss': self.realism_loss_tracker.result(),
       'psnr': self.psnr_tracker.result(),
       'ssim': self.ssim_tracker.result(),
-      'bpp': self.bpp_tracker.result()
+      'rs_bpp': self.rs_bpp_tracker.result()
     }
-  
+
   @tf.function 
   def test_step(self, data):
     cover_image, message = data
@@ -134,27 +150,30 @@ class KerasSteganoGAN(keras.Model):
     stego_image = self.encoder([cover_image, message], training=False)
     recovered_message = self.decoder(stego_image, training=False)
 
-    encoder_decoder_total_loss, similarity_loss, decoding_loss, realism_loss = self.endoder_decoder_loss(cover_image, stego_image, message, recovered_message)
+    encoder_decoder_total_loss, similarity_loss, decoder_loss, realism_loss = self.endoder_decoder_loss(cover_image, stego_image, message, recovered_message)
+    decoder_accuracy = self.decoder_accuracy(message, recovered_message)
     critic_loss = self.critic_loss(cover_image, stego_image)
 
     self.encoder_decoder_total_loss_tracker.update_state(encoder_decoder_total_loss)
     self.critic_loss_tracker.update_state(critic_loss)
     self.similarity_loss_tracker.update_state(similarity_loss)
-    self.decoding_loss_tracker.update_state(decoding_loss)
+    self.decoder_loss_tracker.update_state(decoder_loss)
+    self.decoder_accuracy_tracker.update_state(decoder_accuracy)
     self.realism_loss_tracker.update_state(realism_loss)
     self.psnr_tracker.update_state(tf.image.psnr(cover_image, stego_image, max_val=1.0))
     self.ssim_tracker.update_state(tf.image.ssim(cover_image, stego_image, max_val=1.0))
-    self.bpp_tracker.update_state(self.data_depth * (2 * decoding_loss - 1))
+    self.rs_bpp_tracker.update_state(self.data_depth * (2 * decoder_accuracy - 1))
 
     return {
       'encoder_decoder_total_loss': self.encoder_decoder_total_loss_tracker.result(),
       'critic_loss': self.critic_loss_tracker.result(),
       'similarity_loss': self.similarity_loss_tracker.result(),
-      'decoding_loss': self.decoding_loss_tracker.result(),
+      'decoder_loss': self.decoder_loss_tracker.result(),
+      'decoder_accuracy': self.decoder_accuracy_tracker.result(),
       'realism_loss': self.realism_loss_tracker.result(),
       'psnr': self.psnr_tracker.result(),
       'ssim': self.ssim_tracker.result(),
-      'bpp': self.bpp_tracker.result()
+      'rs_bpp': self.rs_bpp_tracker.result()
     }
 
   def _image_to_tensor(self, image, normalize='0 to 1'):
